@@ -5,18 +5,22 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "tempo.ingesterLabels" . | nindent 4 }}
-  {{- with .Values.annotations }}
+  {{- with .Values.ingester.annotations }}
   annotations:
-    {{ toYaml . | indent 4 }}
+  {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
+{{- if not .Values.ingester.autoscaling.enabled }}
   replicas: {{ .Values.ingester.replicas }}
+{{- end }}
   selector:
     matchLabels:
       {{- include "tempo.ingesterSelectorLabels" . | nindent 6}}
-  serviceName: ingester
+  serviceName: {{ template "tempo.ingesterFullname" . }}
+  podManagementPolicy: Parallel
   updateStrategy:
-    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
   template:
     metadata:
       labels:
@@ -37,7 +41,15 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- if or (.Values.ingester.priorityClassName) (.Values.global.priorityClassName) }}
+      priorityClassName: {{ default .Values.ingester.priorityClassName .Values.global.priorityClassName }}
+      {{- end }}
       serviceAccountName: {{ include "tempo.serviceAccountName" . }}
+      {{- with .Values.tempo.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      enableServiceLinks: false
       containers:
         - args:
             - -target=ingester
@@ -103,9 +115,22 @@ spec:
   {{- if not .Values.ingester.persistence.enabled }}
         - name: data
           emptyDir: {}
+  {{- else if .Values.ingester.persistence.inMemory }}
+        - name: data
+        {{- if .Values.ingester.persistence.inMemory }}
+          emptyDir:
+            medium: Memory
+        {{- end }}
+        {{- if .Values.ingester.persistence.size }}
+            sizeLimit: {{ .Values.ingester.persistence.size }}
+        {{- end }}
   {{- else }}
   volumeClaimTemplates:
     - metadata:
+        {{- with .Values.ingester.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         name: data
       spec:
         accessModes:

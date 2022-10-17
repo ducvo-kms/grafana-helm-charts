@@ -41,6 +41,10 @@ spec:
       relabelings:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .scheme }}
       scheme: {{ . }}
       {{- end }}
@@ -48,5 +52,9 @@ spec:
       tlsConfig:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{- with .targetLabels }}
+  targetLabels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}
 {{- end }}

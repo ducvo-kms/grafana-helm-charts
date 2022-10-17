@@ -1,6 +1,5 @@
-{{- if .Values.ruler.enabled }}
-{{- if gt (int .Values.ruler.replicas) 1 }}
-apiVersion: policy/v1beta1
+{{- if and .Values.ruler.enabled (gt (int .Values.ruler.replicas) 1) }}
+apiVersion: {{ include "loki.pdb.apiVersion" . }}
 kind: PodDisruptionBudget
 metadata:
   name: {{ include "loki.rulerFullname" . }}
@@ -10,6 +9,7 @@ spec:
   selector:
     matchLabels:
       {{- include "loki.rulerSelectorLabels" . | nindent 6 }}
-  maxUnavailable: 1
-{{- end }}
+  {{- with .Values.ruler.maxUnavailable }}
+  maxUnavailable: {{ . }}
+  {{- end }}
 {{- end }}

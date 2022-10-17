@@ -4,20 +4,36 @@ nameOverride: null
 # -- Overrides the chart's computed fullname
 fullnameOverride: null
 
-initContainer:
-  # -- Specifies whether the init container for setting inotify max user instances is to be enabled
+daemonset:
+  # -- Deploys Promtail as a DaemonSet
+  enabled: true
+
+deployment:
+  # -- Deploys Promtail as a Deployment
   enabled: false
-  image:
-    # -- The Docker registry for the init container
-    registry: docker.io
-    # -- Docker image repository for the init container
-    repository: busybox
-    # -- Docker tag for the init container
-    tag: 1.33
-    # -- Docker image pull policy for the init container image
-    pullPolicy: IfNotPresent
-  # -- The inotify max user instances to configure
-  fsInotifyMaxUserInstances: 128
+  replicaCount: 1
+  autoscaling:
+    # -- Creates a HorizontalPodAutoscaler for the deployment
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage:
+
+initContainer: []
+  # # -- Specifies whether the init container for setting inotify max user instances is to be enabled
+  # - name: init
+  #   # -- Docker registry, image and tag for the init container image
+  #   image: docker.io/busybox:1.33
+  #   # -- Docker image pull policy for the init container image
+  #   imagePullPolicy: IfNotPresent
+  #   # -- The inotify max user instances to configure
+  #   command:
+  #     - sh
+  #     - -c
+  #     - sysctl -w fs.inotify.max_user_instances=128
+  #   securityContext:
+  #     privileged: true
 
 image:
   # -- The Docker registry
@@ -122,6 +138,9 @@ tolerations:
 # Use `extraVolumes`/`extraVolumeMounts` for additional custom volumes.
 # @default -- See `values.yaml`
 defaultVolumes:
+  - name: run
+    hostPath:
+      path: /run/promtail
   - name: containers
     hostPath:
       path: /var/lib/docker/containers
@@ -132,6 +151,8 @@ defaultVolumes:
 # -- Default volume mounts. Corresponds to `volumes`.
 # @default -- See `values.yaml`
 defaultVolumeMounts:
+  - name: run
+    mountPath: /run/promtail
   - name: containers
     mountPath: /var/lib/docker/containers
     readOnly: true
@@ -175,7 +196,24 @@ serviceMonitor:
   scrapeTimeout: null
   # -- ServiceMonitor relabel configs to apply to samples before scraping
   # https://github.com/prometheus-operator/prometheus-operator/blob/master/Documentation/api.md#relabelconfig
+  # (defines `relabel_configs`)
   relabelings: []
+  # -- ServiceMonitor relabel configs to apply to samples as the last
+  # step before ingestion
+  # https://github.com/prometheus-operator/prometheus-operator/blob/master/Documentation/api.md#relabelconfig
+  # (defines `metric_relabel_configs`)
+  metricRelabelings: []
+
+# Extra containers created as part of a Promtail Deployment resource
+# - spec for Container:
+#   https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.23/#container-v1-core
+#
+# Note that the key is used as the `name` field, i.e. below will create a
+# container named `promtail-proxy`.
+extraContainers: {}
+  # promtail-proxy:
+  #   image: nginx
+  #   ...
 
 # -- Configure additional ports and services. For each configured port, a corresponding service is created.
 # See values.yaml for details
@@ -232,10 +270,11 @@ config:
   # Must be reference in `config.file` to configure `server.http_listen_port`
   # See default config in `values.yaml`
   serverPort: 3101
-  # -- The Loki address to post logs to.
-  # Must be reference in `config.file` to configure `client.url`.
-  # See default config in `values.yaml`
-  lokiAddress: http://loki-gateway/loki/api/v1/push
+  # -- The config of clients of the Promtail server
+  # Must be reference in `config.file` to configure `clients`
+  # @default -- See `values.yaml`
+  clients:
+    - url: http://loki-gateway/loki/api/v1/push
   # -- A section of reusable snippets that can be reference in `config.file`.
   # Custom snippets may be added in order to reduce redundancy.
   # This is especially helpful when multiple `kubernetes_sd_configs` are use which usually have large parts in common.
@@ -288,9 +327,13 @@ config:
     # This helps debug the Promtail config.
     addScrapeJobLabel: false
 
-    # -- You can put here any keys that will be directly added to the config file's 'client' block.
+    # -- You can put here any keys that will be directly added to the config file's 'limits_config' block.
     # @default -- empty
-    extraClientConfigs: []
+    extraLimitsConfig: ""
+
+    # -- You can put here any keys that will be directly added to the config file's 'server' block.
+    # @default -- empty
+    extraServerConfigs: ""
 
     # -- You can put here any additional scrape configs you want to add to the config file.
     # @default -- empty
@@ -321,6 +364,12 @@ config:
             action: replace
             target_label: app
           - source_labels:
+              - __meta_kubernetes_pod_label_app_kubernetes_io_instance
+              - __meta_kubernetes_pod_label_release
+            regex: ^;*([^;]+)(;.*)?$
+            action: replace
+            target_label: instance
+          - source_labels:
               - __meta_kubernetes_pod_label_app_kubernetes_io_component
               - __meta_kubernetes_pod_label_component
             regex: ^;*([^;]+)(;.*)?$
@@ -343,12 +392,10 @@ config:
     server:
       log_level: {{ .Values.config.logLevel }}
       http_listen_port: {{ .Values.config.serverPort }}
+      {{- tpl .Values.config.snippets.extraServerConfigs . | nindent 2 }}
 
     clients:
-      - url: {{ tpl .Values.config.lokiAddress . }}
-      {{- with .Values.config.snippets.extraClientConfigs }}
-      {{- toYaml . | nindent 2 }}
-      {{- end }}
+      {{- tpl (toYaml .Values.config.clients) . | nindent 2 }}
 
     positions:
       filename: /run/promtail/positions.yaml
@@ -356,6 +403,9 @@ config:
     scrape_configs:
       {{- tpl .Values.config.snippets.scrapeConfigs . | nindent 2 }}
       {{- tpl .Values.config.snippets.extraScrapeConfigs . | nindent 2 }}
+
+    limits_config:
+      {{- tpl .Values.config.snippets.extraLimitsConfig . | nindent 2 }}
 
 networkPolicy:
   # -- Specifies whether Network Policies should be created
